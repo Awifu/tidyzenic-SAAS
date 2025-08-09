@@ -1,79 +1,73 @@
 const express = require('express');
-const app = express();
+const mysql = require('mysql2/promise');
 const path = require('path');
 const fs = require('fs/promises');
-const { initializeApp } = require('firebase/app');
-const { getAuth, signInWithCustomToken, signInAnonymously } = require('firebase/auth');
-const { getFirestore } = require('firebase/firestore');
 
-// Set the port for the server
-const PORT = process.env.PORT || 3000;
+// Load environment variables from a .env file (if running locally)
+require('dotenv').config();
 
-// Global variables provided by the Canvas environment
-const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const app = express();
+const port = process.env.PORT || 3000;
 
-let db;
-let auth;
-
-// Function to initialize Firebase and authenticate
-const initializeFirebase = async () => {
-    try {
-        const firebaseApp = initializeApp(firebaseConfig);
-        db = getFirestore(firebaseApp);
-        auth = getAuth(firebaseApp);
-
-        // Sign in with the provided custom token or anonymously if not available
-        if (initialAuthToken) {
-            await signInWithCustomToken(auth, initialAuthToken);
-            console.log('✅ Signed in with custom token.');
-        } else {
-            await signInAnonymously(auth);
-            console.log('✅ Signed in anonymously.');
-        }
-    } catch (error) {
-        console.error('❌ Error initializing Firebase:', error);
-        // You might want to handle this error more gracefully in a real application
-    }
-};
-
-// Serve static files from the public directory
+// Middleware for static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Define a function to read and inject HTML partials
-const getHomePage = async (req, res) => {
+// Database connection pool
+console.log('Attempting to connect to database...');
+console.log(`DB_HOST: ${process.env.DB_HOST}`);
+console.log(`DB_USER: ${process.env.DB_USER}`);
+
+const pool = mysql.createPool({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+});
+
+// A simple function to get data from the database
+app.get('/api/data', async (req, res) => {
     try {
-        // Read the main HTML file from the views directory
-        let homePageHtml = await fs.readFile(path.join(__dirname, 'views', 'index.html'), 'utf8');
+        const [rows] = await pool.query('SELECT * FROM users');
+        console.log('Successfully queried database for users.');
+        res.json(rows);
+    } catch (error) {
+        console.error('Database query error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
 
-        // Read the header and footer files
-        const headerHtml = await fs.readFile(path.join(__dirname, 'views', 'header.html'), 'utf8');
-        const footerHtml = await fs.readFile(path.join(__dirname, 'views', 'footer.html'), 'utf8');
+// Main route to serve the homepage with header and footer
+app.get('/', async (req, res) => {
+    try {
+        const headerPath = path.join(__dirname, 'views', 'header.html');
+        const footerPath = path.join(__dirname, 'views', 'footer.html');
 
-        // Dynamically inject the header and footer into the main HTML using the placeholders
-        homePageHtml = homePageHtml.replace('{{ HEADER_PLACEHOLDER }}', headerHtml);
-        homePageHtml = homePageHtml.replace('{{ FOOTER_PLACEHOLDER }}', footerHtml);
+        const headerContent = await fs.readFile(headerPath, 'utf8');
+        const footerContent = await fs.readFile(footerPath, 'utf8');
 
-        // Send the final, combined HTML to the client
-        res.send(homePageHtml);
+        // Simple placeholder content for the main body of the page
+        const mainContent = `
+            <main class="container mx-auto px-6 py-12">
+                <div class="text-center">
+                    <h1 class="text-5xl font-bold text-gray-900 mb-4">Welcome to Tidyzenic</h1>
+                    <p class="text-xl text-gray-600">The all-in-one platform for your service business.</p>
+                </div>
+            </main>
+        `;
+
+        res.send(headerContent + mainContent + footerContent);
+        console.log('Homepage successfully served.');
 
     } catch (error) {
         console.error('Error serving homepage:', error);
-        res.status(500).send('<h1>Server Error</h1><p>Could not load the page.</p>');
+        res.status(500).send('Internal Server Error');
     }
-};
+});
 
-// This is the route for the homepage (the root URL '/')
-app.get('/', getHomePage);
-
-// Other routes (e.g., for login, signup, etc.) will be added here in the future
-// app.get('/login', ...);
-// app.get('/signup', ...);
-
-// Initialize Firebase and start the server
-initializeFirebase().then(() => {
-    app.listen(PORT, () => {
-        console.log(`✅ Server running at http://localhost:${PORT}`);
-    });
+// Start the server
+app.listen(port, () => {
+    console.log(`Server is running on http://localhost:${port}`);
 });
